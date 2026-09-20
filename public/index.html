@@ -164,70 +164,124 @@
   <div id="pages"></div>
 </div>
 
+<!-- ── 保命脚本：必须是普通脚本，不能并进下面的 module ──────────────
+     模块一旦 import 失败（比如服务器给 .mjs 返回了错误的 MIME 类型，
+     浏览器会直接拒绝加载），整段模块代码一行都不会执行。
+     而「下载按钮能用 + 出错时给个提示」恰恰是那一刻唯一能救场的东西，
+     所以它们必须跑在模块之外。 -->
+<script>
+(function () {
+  'use strict';
+
+  var FILES = { pdf: '单词本.pdf', docx: '单词本.docx' };
+  // 中文文件名必须编码后再拼进 URL
+  var URLS = {
+    pdf:  encodeURIComponent(FILES.pdf),
+    docx: encodeURIComponent(FILES.docx)
+  };
+
+  var stampEl  = document.getElementById('stamp');
+  var pagesEl  = document.getElementById('pages');
+  var statusEl = document.getElementById('status');
+  var dlPdf    = document.getElementById('dl-pdf');
+  var dlDocx   = document.getElementById('dl-docx');
+
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+
+  function dateTag(d) {
+    if (!d || isNaN(d.getTime())) return '';
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function fmtTime(d) {
+    return pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+           pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  // ?t= 时间戳强制绕过浏览器与 CDN 缓存，确保每次都拿到最新一份
+  var stamp   = Date.now();
+  var pdfUrl  = URLS.pdf  + '?t=' + stamp;
+  var docxUrl = URLS.docx + '?t=' + stamp;
+
+  // 先把链接挂上。无论后面渲染成不成功，这两个按钮都必须能用——
+  // 渲染挂了的时候，下载就是唯一的出路。
+  dlPdf.href  = pdfUrl;
+  dlDocx.href = docxUrl;
+
+  var errorShown = false;
+  function showError(msg) {
+    errorShown = true;
+    statusEl.className = 'status error';
+    statusEl.innerHTML =
+      '<div>无法显示文档内容</div>' +
+      '<div class="hint">' + msg + '</div>' +
+      '<div class="hint">请点上方「下载 PDF」，用 WPS 等应用打开</div>';
+    statusEl.style.display = '';
+  }
+  window.showError = showError;
+
+  // 用 HEAD 读 Last-Modified，确认当前看到的是不是最新版（同源请求才能读到该响应头）
+  fetch(pdfUrl, { method: 'HEAD', cache: 'no-store' })
+    .then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.headers.get('last-modified');
+    })
+    .then(function (lm) {
+      var d = lm ? new Date(lm) : null;
+      stampEl.textContent = (d && !isNaN(d.getTime()))
+        ? '更新于 ' + fmtTime(d)
+        : '已是最新版本';
+      var tag = dateTag(d);
+      dlPdf.setAttribute('download',  '单词本' + (tag ? '-' + tag : '') + '.pdf');
+      dlDocx.setAttribute('download', '单词本' + (tag ? '-' + tag : '') + '.docx');
+    })
+    .catch(function () {
+      stampEl.textContent = '无法读取版本时间';
+      dlPdf.setAttribute('download', '单词本.pdf');
+      dlDocx.setAttribute('download', '单词本.docx');
+    });
+
+  // ── 看门狗 ──────────────────────────────────────────────────
+  // 兜住「下面的模块压根没跑起来」以及解析卡死、内存不足等静默失败。
+  // 没有这层兜底，页面会永远停在「正在加载…」，而用户看不到任何原因。
+  var WATCHDOG_MS = 20000;
+
+  setTimeout(function checkStuck() {
+    if (errorShown) return;                      // 已经报过错了，不要覆盖
+    if (pagesEl.childElementCount > 0) return;   // 已经画出来了，一切正常
+
+    // 切到后台时浏览器不跑 requestAnimationFrame，渲染本来就会暂停，
+    // 这不是故障。等回到前台再判断，避免误报。
+    if (document.visibilityState !== 'visible') {
+      setTimeout(checkStuck, WATCHDOG_MS);
+      return;
+    }
+
+    showError('加载超时。可能是浏览器版本过旧，或网络太慢。');
+  }, WATCHDOG_MS);
+})();
+</script>
+
 <script type="module">
 // vendor/ 里放的是 pdfjs-dist 6.3.289 的 **legacy** 构建，不要换成常规构建。
 // 常规构建依赖 Uint8Array.prototype.toHex 等很新的 JS 特性（Chrome 140+），
 // 手机上较旧的浏览器会直接报 "toHex is not a function" 而白屏。
 // legacy 构建把它转译/兜底掉了，兼容性广得多，代价只是文件大几十 KB。
-import * as pdfjsLib from './vendor/pdf.min.mjs';
+//
+// 文件扩展名用 .js 而不是 .mjs：ES 模块的身份由 import 决定，与扩展名无关，
+// 但 .mjs 在部分服务器/CDN 上 Content-Type 处理不一致，浏览器会拒绝加载。
+import * as pdfjsLib from './vendor/pdf.min.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
-  new URL('./vendor/pdf.worker.min.mjs', import.meta.url).href;
+  new URL('./vendor/pdf.worker.min.js', import.meta.url).href;
 
-const FILES = { pdf: '单词本.pdf', docx: '单词本.docx' };
-// 中文文件名必须编码后再拼进 URL
-const URLS = {
-  pdf:  encodeURIComponent(FILES.pdf),
-  docx: encodeURIComponent(FILES.docx)
-};
-
-const stampEl = document.getElementById('stamp');
-const stage   = document.getElementById('stage');
-const pagesEl = document.getElementById('pages');
+// 下载链接、更新时间、出错提示都由上面那个普通脚本负责，这里只管渲染。
+const stage    = document.getElementById('stage');
+const pagesEl  = document.getElementById('pages');
 const statusEl = document.getElementById('status');
-const dlPdf   = document.getElementById('dl-pdf');
-const dlDocx  = document.getElementById('dl-docx');
+const showError = window.showError;
 
-const pad = (n) => (n < 10 ? '0' : '') + n;
-
-function dateTag(d) {
-  if (!d || isNaN(d.getTime())) return '';
-  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
-}
-
-function fmtTime(d) {
-  return pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
-         pad(d.getHours()) + ':' + pad(d.getMinutes());
-}
-
-// ?t= 时间戳强制绕过浏览器与 CDN 缓存，确保每次都拿到最新一份
-const stamp = Date.now();
-const pdfUrl  = URLS.pdf  + '?t=' + stamp;
-const docxUrl = URLS.docx + '?t=' + stamp;
-
-// 用 HEAD 读 Last-Modified，确认当前看到的是不是最新版（同源请求才能读到该响应头）
-fetch(pdfUrl, { method: 'HEAD', cache: 'no-store' })
-  .then((res) => {
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    return res.headers.get('last-modified');
-  })
-  .then((lm) => {
-    const d = lm ? new Date(lm) : null;
-    stampEl.textContent = (d && !isNaN(d.getTime()))
-      ? '更新于 ' + fmtTime(d)
-      : '已是最新版本';
-    const tag = dateTag(d);
-    dlPdf.setAttribute('download',  '单词本' + (tag ? '-' + tag : '') + '.pdf');
-    dlDocx.setAttribute('download', '单词本' + (tag ? '-' + tag : '') + '.docx');
-  })
-  .catch(() => {
-    stampEl.textContent = '无法读取版本时间';
-    dlPdf.setAttribute('download', '单词本.pdf');
-    dlDocx.setAttribute('download', '单词本.docx');
-  });
-
-dlPdf.href  = pdfUrl;
-dlDocx.href = docxUrl;
+const pdfUrl = encodeURIComponent('单词本.pdf') + '?t=' + Date.now();
 
 // ── 渲染 PDF ──────────────────────────────────────────────────
 // 手机上没有浏览器内嵌的 PDF 阅读器，所以用 pdf.js 把每页画到 canvas 上。
@@ -236,15 +290,6 @@ dlDocx.href = docxUrl;
 let doc = null;
 let generation = 0;        // 防止旋转屏幕时的重入渲染互相打架
 let rendering = false;
-
-function showError(msg) {
-  statusEl.className = 'status error';
-  statusEl.innerHTML =
-    '<div>无法显示文档内容</div>' +
-    '<div class="hint">' + msg + '</div>' +
-    '<div class="hint">请点上方「下载 PDF」，用 WPS 等应用打开</div>';
-  statusEl.style.display = '';
-}
 
 async function renderAll() {
   const myGen = ++generation;
