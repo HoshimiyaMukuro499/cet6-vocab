@@ -1,2 +1,20 @@
-/*
+# 故意不用 /* 通配一切：Cloudflare 对多条规则同时命中时的优先级不易把握，
+# 全部写成互不重叠的精确规则，行为可预测。
+
+# pdf.js 是随站点一起发布的第三方库，带版本号、内容永不变。
+# 长期强缓存：手机上只在第一次访问时下载这 1.7MB，之后走本地缓存。
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# 以下都是会随每次推送变化的内容，一律禁用缓存，确保刷新即最新。
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/*.pdf
+  Cache-Control: no-cache
+
+/*.docx
   Cache-Control: no-cache

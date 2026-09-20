@@ -2,7 +2,13 @@
 
 在 Windows 上用 Word 维护单词本，手机浏览器随时看最新版。
 
-**网站地址**：`https://______________.pages.dev` ← 部署后把地址填到这里
+**网站地址**：<https://cet6-vocab.749316609.workers.dev>
+
+> 这个地址在**手机上**能正常打开。**电脑上打不开是正常的**——不是站点的问题，
+> 是你这台电脑的 DNS（`162.105.129.86`）对 `workers.dev` 有污染，解析到了
+> Facebook 的 IP 上。同一网络下手机能通（实测 `cloudflare.com`、`github.com`
+> 均正常），说明是这台电脑的解析器的问题，不是线路或封锁。
+> 想在电脑上也打开，见下面「换域名」。
 
 ---
 
@@ -31,11 +37,20 @@ public\               ← 网站发布目录，只有这里的内容会被公开
   单词本.pdf           ← 自动导出，不要手动改
   index.html          ← 阅读页
   _headers            ← 缓存策略
+  vendor\             ← pdf.js（第三方库，本地托管，见下）
 tools\
   export-pdf.ps1      ← 调用 Word 导出 PDF 的脚本
 编辑文档.bat
 推送更新.bat
 ```
+
+**关于 `vendor\`**：手机的浏览器不会内嵌显示 PDF，所以阅读页用 pdf.js
+把每一页画到 canvas 上，再按屏幕宽度缩放。这个库是**打包在站点里**的，
+不从境外 CDN 加载，站点运行时零外部依赖。
+
+⚠️ 里面用的是 pdfjs-dist 的 **legacy** 构建，**不要**换成常规构建。
+常规构建依赖 `Uint8Array.prototype.toHex` 等很新的 JS 特性（Chrome 140+），
+手机上较旧的浏览器会直接报 `toHex is not a function` 而白屏。
 
 ---
 
@@ -49,19 +64,27 @@ tools\
 Word 关闭是异步的，进程要十几秒才真正退出。脚本已内置重试，等十几秒再试即可。
 
 **手机上打不开网址？**
-`pages.dev` 在中国大陆没有节点，走跨境线路，部分运营商（尤其移动）可能连不上。
+`workers.dev` 在中国大陆没有节点，走跨境线路，部分运营商（尤其移动）可能连不上。
 先试试换 WiFi / 换流量。如果长期不行，见下面「换域名」。
+
+**首页顶部显示「无法读取版本时间」？**
+更新时间是读 PDF 的 `Last-Modified` 响应头得到的。读不到不影响阅读和下载，
+只是少了个时间戳。下拉刷新通常即可恢复。
 
 **手机上还是旧内容？**
 先下拉刷新。页面已设置不使用缓存，正常情况下刷新即可拿到最新版。
 
 ---
 
-## 换域名（如果 pages.dev 长期打不开）
+## 换域名（如果 workers.dev 长期打不开，或想在电脑上也打开）
 
-`pages.dev` 的失效主要是**域名级封锁**，换成自己的域名可以绕开。
-花 ¥10–30/年 买个 `.top`/`.xyz`，在 Cloudflare Pages 项目里
-`Custom domains` → 添加域名，按提示改 DNS 即可。需要实名，但**不需要备案**。
+`workers.dev` 的失效主要是**域名级封锁**（这个域名本身就是目标），换成自己的域名可以绕开。
+花 ¥10–30/年 买个 `.top`/`.xyz`，在 Cloudflare 的 Worker 项目里
+`Settings` → `Domains & Routes` → `Add` → `Custom Domain`，按提示改 DNS 即可。
+需要实名，但**不需要备案**。
+
+换完记得**回来改本文件顶部和 `public/index.html` 里没有写死域名的部分**
+（阅读页用的是相对路径，不用改；只有本文件顶部那一行网址要更新）。
 
 注意：跨境线路的延迟（约 150–300ms）换域名也解决不了，只能缓解"打不开"。
 
@@ -69,11 +92,12 @@ Word 关闭是异步的，进程要十几秒才真正退出。脚本已内置重
 
 ---
 
-## Cloudflare Pages 配置备忘
+## Cloudflare 配置备忘
 
-如果哪天需要重建项目，构建设置是：
+线上是 **Worker + Static Assets**（Cloudflare 现在推荐新建项目走这条路径，
+Dashboard 里已经没有原来的 Pages 入口了）。构建设置：
 
-- Framework preset: `None`
+- Git 仓库：`HoshimiyaMukuro499/cet6-vocab`，分支 `main`
 - Build command: **留空**
 - Build output directory: `public`
 

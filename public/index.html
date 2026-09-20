@@ -13,6 +13,7 @@
     --muted: #6b7280;
     --line: #e5e7eb;
     --accent: #2563eb;
+    --page-shadow: 0 1px 4px rgba(0,0,0,.14);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -22,6 +23,7 @@
       --muted: #9ca3af;
       --line: #374151;
       --accent: #60a5fa;
+      --page-shadow: 0 1px 6px rgba(0,0,0,.5);
     }
   }
 
@@ -34,7 +36,6 @@
     color: var(--fg);
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
                  "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-    /* 禁止整页橡皮筋回弹，让滚动手势留给 PDF 阅读器 */
     overscroll-behavior: none;
   }
 
@@ -46,21 +47,14 @@
   }
 
   /* ── 顶部固定工具条 ──────────────────────────────────────────
-     必须在顶部而非页底：PDF 渲染失败时，下载按钮就是唯一的出路，
-     不能等到用户滚到底才找得到。 */
+     必须在顶部而非页底：PDF 渲染失败时，下载按钮就是唯一的出路。 */
   header {
     flex: 0 0 auto;
     background: var(--bar);
     border-bottom: 1px solid var(--line);
     padding: 10px 14px;
     padding-top: calc(10px + env(safe-area-inset-top));
-  }
-
-  .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    z-index: 10;
   }
 
   .title { font-size: 16px; font-weight: 600; }
@@ -90,7 +84,6 @@
     text-decoration: none;
     border: 1px solid var(--line);
     color: var(--fg);
-    background: transparent;
     -webkit-tap-highlight-color: transparent;
   }
 
@@ -102,130 +95,219 @@
 
   .actions a:active { opacity: .7; }
 
-  /* ── PDF 显示区 ────────────────────────────────────────────── */
+  /* ── 页面渲染区 ────────────────────────────────────────────── */
   .stage {
     position: relative;
     flex: 1 1 auto;
     min-height: 0;                  /* 关键：不加这行 flex 子项不会收缩，会撑破布局 */
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    padding: 10px 0 calc(10px + env(safe-area-inset-bottom));
   }
 
-  /* 垫在 iframe 底下的占位层：PDF 渲染出来就把这行字盖住了，
-     渲染不出来（浏览器不支持内嵌 PDF）就露出这行提示。
-     比用 JS 探测加载失败可靠得多。 */
-  .placeholder {
-    position: absolute;
-    inset: 0;
+  .page {
+    display: block;
+    margin: 0 auto 10px;
+    background: #fff;               /* PDF 页面本身是白的，深色模式下也是 */
+    box-shadow: var(--page-shadow);
+    border-radius: 2px;
+  }
+
+  /* 加载中 / 出错时的提示层 */
+  .status {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 10px;
+    min-height: 60vh;
     padding: 24px;
     text-align: center;
     color: var(--muted);
     font-size: 14px;
-    line-height: 1.6;
-    pointer-events: none;
+    line-height: 1.7;
   }
 
-  iframe {
-    position: relative;             /* 压住占位层 */
-    display: block;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: transparent;
+  .status .hint { font-size: 13px; }
+
+  .spinner {
+    width: 26px;
+    height: 26px;
+    border: 2.5px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
   }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .status.error .spinner { display: none; }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="row">
-    <div>
-      <div class="title">单词本</div>
-      <div class="stamp" id="stamp">正在读取版本…</div>
-    </div>
-  </div>
+  <div class="title">单词本</div>
+  <div class="stamp" id="stamp">正在读取版本…</div>
   <div class="actions">
     <a class="primary" id="dl-pdf" download>下载 PDF</a>
     <a id="dl-docx" download>下载 Word</a>
   </div>
 </header>
 
-<div class="stage">
-  <div class="placeholder">
-    <div>若此处一直空白，说明浏览器不支持内嵌 PDF</div>
-    <div>请点上方「下载 PDF」，用 WPS 等应用打开</div>
+<div class="stage" id="stage">
+  <div class="status" id="status">
+    <div class="spinner"></div>
+    <div>正在加载…</div>
   </div>
-  <iframe id="viewer" title="单词本 PDF"></iframe>
+  <div id="pages"></div>
 </div>
 
-<script>
-(function () {
-  'use strict';
+<script type="module">
+// vendor/ 里放的是 pdfjs-dist 6.3.289 的 **legacy** 构建，不要换成常规构建。
+// 常规构建依赖 Uint8Array.prototype.toHex 等很新的 JS 特性（Chrome 140+），
+// 手机上较旧的浏览器会直接报 "toHex is not a function" 而白屏。
+// legacy 构建把它转译/兜底掉了，兼容性广得多，代价只是文件大几十 KB。
+import * as pdfjsLib from './vendor/pdf.min.mjs';
 
-  var FILES = { pdf: '单词本.pdf', docx: '单词本.docx' };
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  new URL('./vendor/pdf.worker.min.mjs', import.meta.url).href;
 
-  // 中文文件名必须编码后再拼进 URL
-  var URLS = {
-    pdf:  encodeURIComponent(FILES.pdf),
-    docx: encodeURIComponent(FILES.docx)
-  };
+const FILES = { pdf: '单词本.pdf', docx: '单词本.docx' };
+// 中文文件名必须编码后再拼进 URL
+const URLS = {
+  pdf:  encodeURIComponent(FILES.pdf),
+  docx: encodeURIComponent(FILES.docx)
+};
 
-  var stampEl  = document.getElementById('stamp');
-  var viewer   = document.getElementById('viewer');
-  var dlPdf    = document.getElementById('dl-pdf');
-  var dlDocx   = document.getElementById('dl-docx');
+const stampEl = document.getElementById('stamp');
+const stage   = document.getElementById('stage');
+const pagesEl = document.getElementById('pages');
+const statusEl = document.getElementById('status');
+const dlPdf   = document.getElementById('dl-pdf');
+const dlDocx  = document.getElementById('dl-docx');
 
-  // 日期戳记，用于给下载文件命名，如 单词本-2026-09-20.pdf
-  function dateTag(d) {
-    if (!d || isNaN(d.getTime())) return '';
-    var p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+const pad = (n) => (n < 10 ? '0' : '') + n;
+
+function dateTag(d) {
+  if (!d || isNaN(d.getTime())) return '';
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+}
+
+function fmtTime(d) {
+  return pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
+         pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+// ?t= 时间戳强制绕过浏览器与 CDN 缓存，确保每次都拿到最新一份
+const stamp = Date.now();
+const pdfUrl  = URLS.pdf  + '?t=' + stamp;
+const docxUrl = URLS.docx + '?t=' + stamp;
+
+// 用 HEAD 读 Last-Modified，确认当前看到的是不是最新版（同源请求才能读到该响应头）
+fetch(pdfUrl, { method: 'HEAD', cache: 'no-store' })
+  .then((res) => {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.headers.get('last-modified');
+  })
+  .then((lm) => {
+    const d = lm ? new Date(lm) : null;
+    stampEl.textContent = (d && !isNaN(d.getTime()))
+      ? '更新于 ' + fmtTime(d)
+      : '已是最新版本';
+    const tag = dateTag(d);
+    dlPdf.setAttribute('download',  '单词本' + (tag ? '-' + tag : '') + '.pdf');
+    dlDocx.setAttribute('download', '单词本' + (tag ? '-' + tag : '') + '.docx');
+  })
+  .catch(() => {
+    stampEl.textContent = '无法读取版本时间';
+    dlPdf.setAttribute('download', '单词本.pdf');
+    dlDocx.setAttribute('download', '单词本.docx');
+  });
+
+dlPdf.href  = pdfUrl;
+dlDocx.href = docxUrl;
+
+// ── 渲染 PDF ──────────────────────────────────────────────────
+// 手机上没有浏览器内嵌的 PDF 阅读器，所以用 pdf.js 把每页画到 canvas 上。
+// 顺带解决了自适应：每页按容器宽度重新计算缩放，手机上不用左右拖。
+
+let doc = null;
+let generation = 0;        // 防止旋转屏幕时的重入渲染互相打架
+let rendering = false;
+
+function showError(msg) {
+  statusEl.className = 'status error';
+  statusEl.innerHTML =
+    '<div>无法显示文档内容</div>' +
+    '<div class="hint">' + msg + '</div>' +
+    '<div class="hint">请点上方「下载 PDF」，用 WPS 等应用打开</div>';
+  statusEl.style.display = '';
+}
+
+async function renderAll() {
+  const myGen = ++generation;
+  const width = stage.clientWidth - 16;          // 两侧各留 8px
+  if (width <= 0) return;
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);   // 上限 2，避免高分屏上内存爆掉
+
+  pagesEl.textContent = '';
+
+  for (let n = 1; n <= doc.numPages; n++) {
+    if (myGen !== generation) return;            // 已被新的一轮渲染取代，放弃本次
+
+    const page = await doc.getPage(n);
+    const base = page.getViewport({ scale: 1 });
+    const scale = width / base.width;
+    const viewport = page.getViewport({ scale });
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'page';
+    canvas.width  = Math.floor(viewport.width  * dpr);
+    canvas.height = Math.floor(viewport.height * dpr);
+    canvas.style.width  = Math.floor(viewport.width)  + 'px';
+    canvas.style.height = Math.floor(viewport.height) + 'px';
+
+    const ctx = canvas.getContext('2d');
+    if (dpr !== 1) ctx.scale(dpr, dpr);
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    if (myGen !== generation) return;
+
+    pagesEl.appendChild(canvas);
+    if (n === 1) statusEl.style.display = 'none';   // 第一页出来就撤掉加载提示
   }
+}
 
-  function fmtTime(d) {
-    var p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
-           p(d.getHours()) + ':' + p(d.getMinutes());
+(async () => {
+  try {
+    doc = await pdfjsLib.getDocument({ url: pdfUrl }).promise;
+    await renderAll();
+    if (pagesEl.childElementCount === 0) {
+      showError('文档没有可显示的页面。');
+    }
+  } catch (err) {
+    showError('错误信息：' + (err && err.message ? err.message : String(err)));
   }
-
-  function baseName(ext, tag) {
-    return '单词本' + (tag ? '-' + tag : '') + '.' + ext;
-  }
-
-  // 用 HEAD 请求读 Last-Modified，判断当前看到的是不是最新版。
-  // 同源请求才能读到该响应头。
-  fetch(URLS.pdf, { method: 'HEAD', cache: 'no-store' })
-    .then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      return res.headers.get('last-modified');
-    })
-    .then(function (lm) {
-      var d = lm ? new Date(lm) : null;
-      stampEl.textContent = (d && !isNaN(d.getTime()))
-        ? '更新于 ' + fmtTime(d)
-        : '已是最新版本';
-      var tag = dateTag(d);
-      dlPdf.setAttribute('download',  baseName('pdf',  tag));
-      dlDocx.setAttribute('download', baseName('docx', tag));
-    })
-    .catch(function () {
-      stampEl.textContent = '无法读取版本时间';
-      dlPdf.setAttribute('download',  baseName('pdf',  ''));
-      dlDocx.setAttribute('download', baseName('docx', ''));
-    });
-
-  // ?t= 时间戳强制绕过浏览器与 CDN 缓存，确保每次都拿到最新一份
-  var t = Date.now();
-
-  dlPdf.href  = URLS.pdf  + '?t=' + t;
-  dlDocx.href = URLS.docx + '?t=' + t;
-
-  // #view=FitH 让浏览器自带的 PDF 阅读器按宽度铺满，手机上不用左右拖
-  viewer.src = URLS.pdf + '?t=' + t + '#view=FitH';
 })();
+
+// 旋屏 / 改窗口大小时按新宽度重排。防抖 + 串行化，
+// 避免连发多次重渲染把手机卡住。
+let resizeTimer = null;
+function onResize() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(async () => {
+    if (!doc || rendering) return;
+    rendering = true;
+    try { await renderAll(); } catch (e) { showError(String(e)); }
+    finally { rendering = false; }
+  }, 250);
+}
+
+window.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', onResize);
 </script>
 
 </body>
