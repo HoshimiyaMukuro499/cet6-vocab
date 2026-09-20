@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2937">
+<title>单词本</title>
+<style>
+  :root {
+    --bg: #f2f3f5;
+    --bar: #ffffff;
+    --fg: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111827;
+      --bar: #1f2937;
+      --fg: #f3f4f6;
+      --muted: #9ca3af;
+      --line: #374151;
+      --accent: #60a5fa;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+                 "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    /* 禁止整页橡皮筋回弹，让滚动手势留给 PDF 阅读器 */
+    overscroll-behavior: none;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    /* dvh 而非 vh：移动端地址栏收起/展开时不会跳动 */
+    height: 100dvh;
+  }
+
+  /* ── 顶部固定工具条 ──────────────────────────────────────────
+     必须在顶部而非页底：PDF 渲染失败时，下载按钮就是唯一的出路，
+     不能等到用户滚到底才找得到。 */
+  header {
+    flex: 0 0 auto;
+    background: var(--bar);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 14px;
+    padding-top: calc(10px + env(safe-area-inset-top));
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .title { font-size: 16px; font-weight: 600; }
+
+  .stamp {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .actions a {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;              /* 触摸目标不小于 44px */
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    border: 1px solid var(--line);
+    color: var(--fg);
+    background: transparent;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .actions a.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  .actions a:active { opacity: .7; }
+
+  /* ── PDF 显示区 ────────────────────────────────────────────── */
+  .stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;                  /* 关键：不加这行 flex 子项不会收缩，会撑破布局 */
+  }
+
+  /* 垫在 iframe 底下的占位层：PDF 渲染出来就把这行字盖住了，
+     渲染不出来（浏览器不支持内嵌 PDF）就露出这行提示。
+     比用 JS 探测加载失败可靠得多。 */
+  .placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.6;
+    pointer-events: none;
+  }
+
+  iframe {
+    position: relative;             /* 压住占位层 */
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="row">
+    <div>
+      <div class="title">单词本</div>
+      <div class="stamp" id="stamp">正在读取版本…</div>
+    </div>
+  </div>
+  <div class="actions">
+    <a class="primary" id="dl-pdf" download>下载 PDF</a>
+    <a id="dl-docx" download>下载 Word</a>
+  </div>
+</header>
+
+<div class="stage">
+  <div class="placeholder">
+    <div>若此处一直空白，说明浏览器不支持内嵌 PDF</div>
+    <div>请点上方「下载 PDF」，用 WPS 等应用打开</div>
+  </div>
+  <iframe id="viewer" title="单词本 PDF"></iframe>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var FILES = { pdf: '单词本.pdf', docx: '单词本.docx' };
+
+  // 中文文件名必须编码后再拼进 URL
+  var URLS = {
+    pdf:  encodeURIComponent(FILES.pdf),
+    docx: encodeURIComponent(FILES.docx)
+  };
+
+  var stampEl  = document.getElementById('stamp');
+  var viewer   = document.getElementById('viewer');
+  var dlPdf    = document.getElementById('dl-pdf');
+  var dlDocx   = document.getElementById('dl-docx');
+
+  // 日期戳记，用于给下载文件命名，如 单词本-2026-09-20.pdf
+  function dateTag(d) {
+    if (!d || isNaN(d.getTime())) return '';
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function fmtTime(d) {
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' +
+           p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
+  function baseName(ext, tag) {
+    return '单词本' + (tag ? '-' + tag : '') + '.' + ext;
+  }
+
+  // 用 HEAD 请求读 Last-Modified，判断当前看到的是不是最新版。
+  // 同源请求才能读到该响应头。
+  fetch(URLS.pdf, { method: 'HEAD', cache: 'no-store' })
+    .then(function (res) {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.headers.get('last-modified');
+    })
+    .then(function (lm) {
+      var d = lm ? new Date(lm) : null;
+      stampEl.textContent = (d && !isNaN(d.getTime()))
+        ? '更新于 ' + fmtTime(d)
+        : '已是最新版本';
+      var tag = dateTag(d);
+      dlPdf.setAttribute('download',  baseName('pdf',  tag));
+      dlDocx.setAttribute('download', baseName('docx', tag));
+    })
+    .catch(function () {
+      stampEl.textContent = '无法读取版本时间';
+      dlPdf.setAttribute('download',  baseName('pdf',  ''));
+      dlDocx.setAttribute('download', baseName('docx', ''));
+    });
+
+  // ?t= 时间戳强制绕过浏览器与 CDN 缓存，确保每次都拿到最新一份
+  var t = Date.now();
+
+  dlPdf.href  = URLS.pdf  + '?t=' + t;
+  dlDocx.href = URLS.docx + '?t=' + t;
+
+  // #view=FitH 让浏览器自带的 PDF 阅读器按宽度铺满，手机上不用左右拖
+  viewer.src = URLS.pdf + '?t=' + t + '#view=FitH';
+})();
+</script>
+
+</body>
+</html>

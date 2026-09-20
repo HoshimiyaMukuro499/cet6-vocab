@@ -1,0 +1,12 @@
+# Word 打开文档时生成的临时锁文件。
+# 必须忽略：它内容不完整，被提交上去有概率把仓库里的文档弄坏。
+~$*.docx
+
+# Office 其它临时文件
+*.tmp
+~$*
+
+# Windows 杂项
+Thumbs.db
+Desktop.ini
+desktop.ini

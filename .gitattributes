@@ -1,0 +1,8 @@
+# 二进制文件：禁止任何换行符转换或差异处理。
+# 这两个是你的核心资产，被 git 动过一行字节就可能打不开。
+*.docx -text -diff
+*.pdf  -text -diff
+
+# 脚本固定用 CRLF：cmd.exe 对 LF 结尾的 .bat 处理不可靠
+*.bat text eol=crlf
+*.ps1 text eol=crlf
