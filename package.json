@@ -1,0 +1,9 @@
+{
+  "name": "cet6-vocab",
+  "version": "0.0.0",
+  "private": true,
+  "description": "单词本站：静态阅读页 + 表情墙接口。Worker 本身无任何运行期依赖，wrangler 只是本地预览和部署用的工具。",
+  "devDependencies": {
+    "wrangler": "^4.20.0"
+  }
+}

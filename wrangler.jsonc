@@ -1,0 +1,43 @@
+{
+  // ⚠️ 这个 name 必须和 Cloudflare 后台里现有的 Worker 名字完全一致。
+  // 写错了不会报错——它会安静地**新建一个 Worker**，部署到另一个网址去，
+  // 而你会以为「推送成功但网站没变」。
+  "name": "cet6-vocab",
+
+  "main": "src/worker.js",
+
+  // 固定 compatibility_date，不要写 "today"：
+  // 用 "today" 的话，Cloudflare 哪天改了运行时行为，你的部署会在某次毫无关联的
+  // 推送后突然坏掉，而且没有可对照的时间点。
+  "compatibility_date": "2026-09-01",
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+
+    // 静态资源里没有对应文件时，不要自作主张回退到首页。
+    // 回退会让拼错的资源路径返回 200 + 一整页 HTML，从而把「404」伪装成
+    // 「服务器返回了乱码」。宁可干脆地 404。
+    "not_found_handling": "none",
+
+    // 只有 /api/* 先经过 Worker，其余请求仍由静态资源直接服务——CDN 缓存不受影响。
+    // 数组写法需要 Wrangler ≥ 4.20.0，所以 package.json 里钉了版本。
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cet6-emoji",
+
+      // 线上数据库 `cet6-emoji` 的 ID。这是后台生成的，不要手改、不要"整理格式"。
+      // 本地 `npx wrangler dev` 不用它（本地跑的是 SQLite 副本），
+      // 但线上部署时这串必须是真实存在的 ID，否则部署直接报错。
+      "database_id": "628b7f27-6674-455f-bd82-1f4ba7621171"
+    }
+  ],
+
+  // 打开线上日志。表情墙出问题时，这是唯一能看到 Worker 内部报错的地方
+  // （接口一律只回笼统的 {"error":{"code":"INTERNAL"}}，不泄露细节）。
+  "observability": { "enabled": true }
+}

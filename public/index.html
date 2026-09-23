@@ -143,13 +143,151 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .status.error .spinner { display: none; }
+
+  /* ── 表情墙 ──────────────────────────────────────────────────
+     它和 pdf.js 毫无关系，所以样式、脚本、状态行全部独立，
+     不该被 PDF 渲染的成败连累。 */
+
+  /* 把「表情墙」入口塞在版本号那一行的右侧，不额外占一行高度——
+     手机屏幕上每一行垂直空间都要用来读文档。 */
+  .stamp-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 2px;
+  }
+
+  #to-wall {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--accent);
+    text-decoration: none;
+    white-space: nowrap;
+    padding: 4px 2px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #wall {
+    margin: 6px 12px 18px;
+  }
+
+  #wall h2 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  #wall-count { font-size: 12px; font-weight: 400; color: var(--muted); }
+
+  /* 方形区域。高度由脚本按宽度设定，而不是用 aspect-ratio——
+     旧版 webview 不支持 aspect-ratio，而这里必须是个正方形。 */
+  #wall-board {
+    position: relative;
+    width: 100%;
+    margin-top: 8px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--bar);
+    overflow: hidden;
+  }
+
+  .wall-item {
+    position: absolute;
+    /* 不加这行，emoji 的基线对齐会让它在框里偏高 */
+    line-height: 1;
+    transform: translate(-50%, -50%);
+    /* 深色模式下 emoji 是固定色位图，深色字形在深色底上看不见，给个底衬 */
+    background: var(--bar);
+    border-radius: 50%;
+    padding: 2px;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 非管理员时表情不接收指针事件：绝不能让它们拦住滑动 */
+  #wall:not(.admin) .wall-item { pointer-events: none; }
+  #wall.admin .wall-item { cursor: pointer; }
+  #wall.admin .wall-item:active { opacity: .5; }
+
+  #wall-empty {
+    position: absolute;
+    top: 0; right: 0; bottom: 0; left: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--muted);
+  }
+
+  /* 10 个 44px 按钮 = 440px，在 360px 屏上必然溢出，所以必须换行 */
+  #wall-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  #wall-picker button {
+    flex: 1 1 44px;
+    min-width: 44px;
+    min-height: 44px;              /* 触摸目标不小于 44px */
+    padding: 0;
+    font-size: 22px;
+    line-height: 1;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bar);
+    color: var(--fg);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #wall-picker button:active { opacity: .6; }
+  #wall-picker button[disabled] { opacity: .3; }
+
+  #wall-clear {
+    width: 100%;
+    min-height: 44px;
+    margin-top: 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: transparent;
+    color: #dc2626;
+    font-size: 14px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (prefers-color-scheme: dark) { #wall-clear { color: #f87171; } }
+
+  /* 墙用自己的状态行，不复用 #status：
+     那个是 PDF 的，而且 showError() 走 innerHTML——墙全程只用 textContent。 */
+  #wall-status {
+    margin-top: 8px;
+    min-height: 1.5em;             /* 占好位，出现文字时版面不跳 */
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--muted);
+  }
+
+  #wall-status.error { color: #dc2626; }
+  @media (prefers-color-scheme: dark) { #wall-status.error { color: #f87171; } }
 </style>
 </head>
 <body>
 
 <header>
   <div class="title">单词本</div>
-  <div class="stamp" id="stamp">正在读取版本…</div>
+  <div class="stamp-row">
+    <div class="stamp" id="stamp">正在读取版本…</div>
+    <a id="to-wall" href="#wall">表情墙 ↓</a>
+  </div>
   <div class="actions">
     <a class="primary" id="dl-pdf" download>下载 PDF</a>
     <a id="dl-docx" download>下载 Word</a>
@@ -162,6 +300,21 @@
     <div>正在加载…</div>
   </div>
   <div id="pages"></div>
+
+  <!-- ⚠️ 这段必须是 #pages 的**兄弟节点**，绝不能放进去，两个原因：
+       1. renderAll() 每次旋屏/改窗口都执行 pagesEl.textContent = ''，放里面会被清掉；
+       2. 20 秒看门狗用 pagesEl.childElementCount > 0 判断「PDF 画出来了」，
+          往里塞节点会悄悄废掉全站唯一的故障信号。 -->
+  <section id="wall">
+    <h2>表情墙 <span id="wall-count"></span></h2>
+    <div id="wall-board">
+      <div id="wall-empty">这面墙还是空的<br>点下面的表情，留一个</div>
+    </div>
+    <!-- 按钮由脚本生成：接口不通时保持空白。
+         摆一排按不动的按钮，比什么都不摆更糟。 -->
+    <div id="wall-picker"></div>
+    <div id="wall-status" role="status" aria-live="polite"></div>
+  </section>
 </div>
 
 <!-- ── 保命脚本：必须是普通脚本，不能并进下面的 module ──────────────
@@ -353,6 +506,483 @@ function onResize() {
 
 window.addEventListener('resize', onResize);
 window.addEventListener('orientationchange', onResize);
+</script>
+
+<!-- ── 表情墙 ────────────────────────────────────────────────────────
+     又一段独立的普通脚本。不并进上面的 module（module 可能一行都不执行），
+     也不并进那个保命脚本（它的职责是「下载 + 版本 + 看门狗」，保持冻结）。
+     墙和 pdf.js 毫无关系，不该被 PDF 渲染的成败连累。
+
+     全程只用 textContent，不用 innerHTML。 -->
+<script>
+(function () {
+  'use strict';
+
+  // 表情代号 → 字形。这些字面量是本脚本自己的，服务端存的是代号不是字符，
+  // 所以流进 DOM 的每一个字节都源自这里，而不是用户输入。
+  // 与 src/worker.js 的 KINDS、migrations/0001_init.sql 的 CHECK 三处必须一致。
+  var GLYPH = {
+    smile: '😊', grin: '😄', love: '😍', kiss: '😘', think: '🤔',
+    sad: '😔', cry: '😭', angry: '😠', strong: '💪', party: '🎉'
+  };
+  var ORDER = ['smile', 'grin', 'love', 'kiss', 'think', 'sad', 'cry', 'angry', 'strong', 'party'];
+
+  var POLL_MS        = 5000;
+  var OFFLINE_MS     = 300000;   // 接口整个不存在（纯静态托管）：5 分钟后再探一次
+  var BACKOFF_MS     = [5000, 10000, 20000, 30000];   // 网络错误 / 5xx 的退避
+
+  var ROW_MAX        = 6;        // 少于此数时居中排成一行
+  var FONT_MIN       = 16;       // 字号下限，不再往下缩——再小就看不清了
+  var FONT_MAX       = 44;
+
+  var wallEl      = document.getElementById('wall');
+  var boardEl     = document.getElementById('wall-board');
+  var emptyEl     = document.getElementById('wall-empty');
+  var pickerEl    = document.getElementById('wall-picker');
+  var statusEl    = document.getElementById('wall-status');
+  var countEl     = document.getElementById('wall-count');
+  var toWallEl    = document.getElementById('to-wall');
+
+  /* 「每次浏览留一个」的状态。刻意只用内存变量，不落任何存储。
+
+     为什么不用 sessionStorage：它在同一个标签页里**刷新也不清空**，
+     于是实际行为会变成「这个标签页里只能留一个」，必须关掉标签页重开才能再留——
+     那不是「每次浏览」，是「每个标签页」。放内存里，刷新即一次新的浏览，
+     符合字面意思，也顺带消掉了「访问存储会抛异常」这一整类手机 webview 问题。
+
+     代价明写在案：按住刷新键可以连留多个。这是明知故取的——
+     这里本来就只是界面便利，不是安全控制，真正的约束在服务端的突发上限。
+     ⚠️ 不要把这两行「改进」成持久化存储，那会改掉上面这个产品决定。 */
+  var session = { cid: null, left: false };
+
+  function clientId() {
+    if (!session.cid) {
+      var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      var s = '';
+      for (var i = 0; i < 20; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+      session.cid = s;
+    }
+    return session.cid;
+  }
+
+  /* ── 状态 ─────────────────────────────────────────────────────── */
+
+  var items     = new Map();   // id → { el, x, y }
+  // 墙上的真实总数，由服务端给出。它可能大于 items.size——
+  // 接口一次最多返回 250 条，超出部分不画（字号有 16px 下限，画不下）。
+  // 但计数该显示真实总数：读者想知道的是「有多少人留过」，不是渲染上限。
+  var wallTotal = 0;
+  var version   = null;        // 已同步到的版本号；null 表示下次必须拉全量
+  var adminToken = null;       // 只存在内存里，绝不落任何存储
+  var offline   = false;       // 接口确认不存在（404/501 或返回的不是 JSON）
+  var offlineMsg = false;      // 状态行当前那句是不是 markOffline 写的
+  var pickerReady = false;     // 选择器是否已按服务端返回的代号表建好
+  var backoff   = 0;
+  var pageVisible = !document.hidden;
+  var onScreen    = null;      // null = 还没测过（区分于「确定在屏幕外」的 false）
+  var inFlight    = false;     // 防同一次请求叠加发出
+  var timer     = null;
+
+  function setStatus(msg, isError) {
+    statusEl.textContent = msg || '';
+    statusEl.className = isError ? 'error' : '';
+  }
+
+  /* ── 渲染 ─────────────────────────────────────────────────────── */
+
+  function addNode(it) {
+    var glyph = GLYPH[it.kind];
+    // 查不到就什么都不画。服务端可能新增了代号而这片页面还是旧的。
+    if (!glyph) return;
+
+    var el = document.createElement('span');
+    el.className = 'wall-item';
+    el.textContent = glyph;
+    el.setAttribute('data-id', it.id);
+    boardEl.appendChild(el);
+    items.set(it.id, { el: el, x: it.x, y: it.y });
+  }
+
+  // 0~1 重映射到内缩区间。**不是钳制**——
+  // 表情用 translate(-50%,-50%) 居中，贴边的会被方框裁掉一半。
+  function inset(v, halfPct) {
+    var lo = halfPct, hi = 100 - halfPct;
+    if (hi <= lo) return 50;
+    return lo + v * (hi - lo);
+  }
+
+  function relayout() {
+    // 先把方框摆正。全局是 box-sizing: border-box，所以把 height 设成和
+    // **含边框的宽度**相等才是正方形；用 clientWidth 会漏掉 2px 边框，
+    // 内容区就变成 757×755，圆形分布的边缘会差一点点。
+    var side = boardEl.getBoundingClientRect().width;
+    if (side <= 0) return;                    // 还没上屏，等下一次
+    boardEl.style.height = side + 'px';
+
+    // 表情的百分比坐标是相对内容区算的，所以排版用 clientWidth。
+    var w = boardEl.clientWidth;
+
+    var list = [];
+    items.forEach(function (v, id) { list.push({ id: id, entry: v }); });
+    list.sort(function (a, b) { return a.id - b.id; });
+
+    var n = list.length;
+    var shown = wallTotal || n;
+    countEl.textContent = shown ? shown + ' 个' : '';
+    emptyEl.style.display = n ? 'none' : '';
+
+    if (!n) return;
+
+    // 面积估算：n 个字号为 F 的表情铺满方框
+    var F = 0.85 * w / Math.sqrt(n);
+    var asRow = n <= ROW_MAX;
+    F = Math.max(FONT_MIN, Math.min(FONT_MAX, F));
+
+    var setFont = function (size) {
+      var widest = 0;
+      for (var j = 0; j < n; j++) {
+        list[j].entry.el.style.fontSize = size + 'px';
+        widest = Math.max(widest, list[j].entry.el.offsetWidth);
+      }
+      return widest;
+    };
+
+    // 1~6 个时居中排成一行。位置照常落库，只是这个数量下不采用它——
+    // 一个表情孤零零浮在大方框里，看起来像渲染错误。
+    if (asRow) {
+      // 必须**量出实际宽度**，不能按字号估：emoji 实测约 1.45em 宽，
+      // 而不是 1em。5 个时按估算是「排得下」，实测却有 2 个被裁。
+      var widest = setFont(F);
+
+      // 排不下就按比例缩。F 只是个起点，宽度才是硬约束：
+      // 窄屏上 6 个 44px 的表情需要 384px，而方框只有 279px。
+      if (widest * n > w) {
+        F = Math.max(FONT_MIN, F * (w / (widest * n)) * 0.92);
+        widest = setFont(F);
+      }
+
+      var half = widest / 2;
+      var span = w - 2 * half;
+      // 极端窄屏（缩到 16px 下限仍排不下）时宁可重叠，也不要全堆在中心变成一个
+      if (span <= 0) { half = 0; span = w; }
+
+      for (var i = 0; i < n; i++) {
+        var cx = (n === 1) ? w / 2 : half + span * i / (n - 1);
+        list[i].entry.el.style.left = (cx / w * 100) + '%';
+        list[i].entry.el.style.top  = '50%';
+      }
+      return;
+    }
+
+    setFont(F);
+
+    // 密集时不逐个测量（250 个元素反复触发布局太慢），改用估算：
+    // 半个字形约 0.62F，再加 3px 底衬余量。宁可略微保守。
+    var halfPct = (F * 0.62 + 3) / w * 100;
+
+    for (i = 0; i < n; i++) {
+      list[i].entry.el.style.left = inset(list[i].entry.x, halfPct) + '%';
+      list[i].entry.el.style.top  = inset(list[i].entry.y, halfPct) + '%';
+    }
+  }
+
+  /* ── 同步 ─────────────────────────────────────────────────────── */
+
+  function onState(json) {
+    if (!json || json.unchanged) return;
+    if (typeof json.v === 'number') version = json.v;
+    if (typeof json.total === 'number') wallTotal = json.total;
+
+    var seen = Object.create(null);
+    var list = json.items || [];
+    for (var i = 0; i < list.length; i++) {
+      seen[list[i].id] = true;
+      if (!items.has(list[i].id)) addNode(list[i]);
+    }
+
+    // 增、删、窗口滑动走的是同一条路径：不在本次响应里的就删掉。
+    // 服务端保证升序，这里仍按 id 自己排——不依赖它。
+    var gone = [];
+    items.forEach(function (v, id) { if (!seen[id]) gone.push(id); });
+    for (var j = 0; j < gone.length; j++) {
+      items.get(gone[j]).el.remove();
+      items.delete(gone[j]);
+    }
+
+    relayout();
+  }
+
+  function request() {
+    var url = '/api/emojis' + (version === null ? '' : '?v=' + version);
+    return fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } })
+      .then(function (res) {
+        var ct = (res.headers.get('content-type') || '').toLowerCase();
+        // 先看 Content-Type 再 .json()。若静态资源层吃掉了 /api/*，
+        // 这里会返回 200 + text/html（首页本身），.json() 抛错后看起来就像
+        // 「后端不存在」，会把排查引向完全错误的方向。
+        if (ct.indexOf('json') === -1) {
+          if (res.status === 404 || res.status === 501 || ct.indexOf('html') !== -1) {
+            markOffline();
+            return null;
+          }
+          throw new Error('HTTP ' + res.status);
+        }
+        if (!res.ok) {
+          // 503 且带 DB_NOT_READY = 线上的数据库还没建好（见 README「第一次启用」）。
+          // 这不是网络问题，报「连接不上」会把人引去查自己的信号。
+          // 但它会自己好的——数据库一建好，下一次重试就恢复，不用刷新页面。
+          return res.json().catch(function () { return null; }).then(function (b) {
+            var code = b && b.error && b.error.code;
+            throw new Error(code === 'DB_NOT_READY' ? 'NOT_READY' : 'HTTP ' + res.status);
+          });
+        }
+        return res.json();
+      })
+      .then(function (json) {
+        if (json === null) return OFFLINE_MS;
+        backoff = 0;
+        // 首次成功、或从离线恢复，都要（重）建选择器
+        if (offline || !pickerReady) markOnline(json);
+        onState(json);
+        return POLL_MS;
+      })
+      .catch(function (err) {
+        var d = BACKOFF_MS[Math.min(backoff, BACKOFF_MS.length - 1)];
+        backoff++;
+        if (err && err.message === 'NOT_READY') {
+          markOffline('表情墙正在准备中，稍后再来');
+        } else {
+          setStatus('表情墙连接不上，稍后重试', true);
+        }
+        return d;
+      });
+  }
+
+  function drive(delay) {
+    clearTimeout(timer);
+    timer = setTimeout(run, delay);
+  }
+
+  function run() {
+    // 切到后台就停轮询；滚出屏幕也停。回到前台/滚回来时立刻补一次。
+    if (pageVisible === false || onScreen === false) return;
+    // 首屏那次 request() 和观察器的回调可能几乎同时排进来，不去重就会白发两次。
+    if (inFlight) return;
+    inFlight = true;
+    request().then(function (delay) {
+      inFlight = false;
+      drive(delay);
+    });
+  }
+
+  function markOffline(msg) {
+    if (offline) return;
+    offline = true;
+    pickerReady = false;
+    boardEl.style.display = 'none';
+    pickerEl.textContent = '';
+    toWallEl.style.display = 'none';
+    setStatus(msg || '表情墙暂未开启');
+    offlineMsg = true;      // 记着自己占了状态行，恢复时要还回去
+  }
+
+  function markOnline(json) {
+    offline = false;
+    pickerReady = true;
+    // 从离线/未就绪恢复：墙已经能用了，不能还挂着「正在准备中」。
+    // 用标志位而不是无条件清空——管理员那行提示也可能正占着这里。
+    if (offlineMsg) { offlineMsg = false; setStatus(''); }
+    boardEl.style.display = '';
+    toWallEl.style.display = '';
+    // 以服务端返回的代号表为准（它可能新增了代号），本地 ORDER 只是兜底。
+    // GLYPH 里查不到的代号会被 buildPicker 跳过，不会画出空白按钮。
+    buildPicker(Array.isArray(json && json.kinds) && json.kinds.length ? json.kinds : ORDER);
+    relayout();
+  }
+
+  /* ── 留表情 ───────────────────────────────────────────────────── */
+
+  function buildPicker(kinds) {
+    pickerEl.textContent = '';
+    for (var i = 0; i < kinds.length; i++) {
+      if (!GLYPH[kinds[i]]) continue;
+      pickerEl.appendChild(makeButton(kinds[i]));
+    }
+    applyLeftState();
+  }
+
+  function makeButton(kind) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = GLYPH[kind];
+    b.setAttribute('aria-label', kind);
+    b.addEventListener('click', function () { submit(kind); });
+    return b;
+  }
+
+  function eachButton(fn) {
+    var bs = pickerEl.querySelectorAll('button');
+    for (var i = 0; i < bs.length; i++) fn(bs[i]);
+  }
+
+  function applyLeftState() {
+    eachButton(function (b) { b.disabled = session.left || offline; });
+    return session.left;
+  }
+
+  function submit(kind) {
+    if (offline) return;
+    if (applyLeftState()) {
+      setStatus('这次浏览已经留过表情了，下次再来');
+      return;
+    }
+
+    // 点击瞬间就禁用，且必须在 fetch 之前——
+    // 双击会产生两条，而「每次浏览留一个」正是要挡这个。
+    eachButton(function (b) { b.disabled = true; });
+    setStatus('正在留下…');
+
+    fetch('/api/emojis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: kind, client_id: clientId() }),
+    })
+      .then(function (res) {
+        var ct = (res.headers.get('content-type') || '').toLowerCase();
+        if (!res.ok || ct.indexOf('json') === -1) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (json) {
+        session.left = true;
+        applyLeftState();
+        if (json && json.item && !items.has(json.item.id)) {
+          addNode(json.item);
+          // 本地自增，好让计数立刻反映这一笔，不用等下一轮全量拉取
+          if (json.duplicate !== true) wallTotal++;
+          relayout();
+        }
+        // 这句话是常驻的，不是一闪而过的反馈：按钮随即被禁用，
+        // 而禁用的按钮连 click 事件都不会触发，所以「已经留过」这个解释
+        // 没有别的地方可以讲，必须写在这里。
+        setStatus('留好了 ✓ 这次浏览留过一个啦');
+        // 版本号已经变了，强制下一次拉全量，和其他人的表情对齐
+        version = null;
+        drive(POLL_MS);
+      })
+      .catch(function () {
+        // 失败时不置 session.left：请求可能压根没到服务端，得让用户能重试
+        eachButton(function (b) { b.disabled = false; });
+        setStatus('没能留下，检查网络后再试一次', true);
+      });
+  }
+
+  /* ── 管理员 ───────────────────────────────────────────────────── */
+
+  (function initAdmin() {
+    var m = /(?:^|[#&])admin=([^&]*)/.exec(location.hash);
+    if (!m) return;
+    var token = m[1];
+
+    // 立刻从地址栏抹掉：截图、分享、浏览器历史都会把它泄露出去
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+
+    if (!token) return;
+
+    fetch('/api/admin', { headers: { 'X-Admin-Token': token }, cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) { setStatus('管理令牌无效', true); return; }
+        adminToken = token;
+        wallEl.className = 'admin';
+        addClearButton();
+        setStatus('管理员模式：点表情即可删除');
+      })
+      .catch(function () { setStatus('无法校验管理令牌', true); });
+  })();
+
+  boardEl.addEventListener('click', function (e) {
+    if (!adminToken) return;
+    var el = e.target;
+    while (el && el !== boardEl && !el.getAttribute('data-id')) el = el.parentNode;
+    if (!el || el === boardEl) return;
+    removeItem(Number(el.getAttribute('data-id')));
+  });
+
+  function removeItem(id) {
+    if (!adminToken || !id) return;
+    if (!window.confirm('删掉这个表情？')) return;
+    fetch('/api/emojis/' + id, { method: 'DELETE', headers: { 'X-Admin-Token': adminToken } })
+      .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); })
+      .then(function () {
+        var entry = items.get(id);
+        if (entry) { entry.el.remove(); items.delete(id); wallTotal--; relayout(); }
+        version = null;
+        setStatus('已删除');
+        drive(POLL_MS);
+      })
+      .catch(function () { setStatus('删除失败', true); });
+  }
+
+  function addClearButton() {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.id = 'wall-clear';
+    b.textContent = '清空表情墙';
+    b.addEventListener('click', function () {
+      if (!window.confirm('清空全部表情？此操作不可撤销。')) return;
+      fetch('/api/emojis?all=1', { method: 'DELETE', headers: { 'X-Admin-Token': adminToken } })
+        .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
+        .then(function () {
+          items.forEach(function (v) { v.el.remove(); });
+          items.clear();
+          wallTotal = 0;
+          relayout();
+          version = null;
+          setStatus('已清空');
+          drive(POLL_MS);
+        })
+        .catch(function () { setStatus('清空失败', true); });
+    });
+    pickerEl.parentNode.insertBefore(b, pickerEl.nextSibling);
+  }
+
+  /* ── 生命周期 ─────────────────────────────────────────────────── */
+
+  // 墙自己的 resize 监听，不能复用模块里那个——
+  // 按本文件的设计约定，模块可能一行都没执行过。
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(relayout, 150);
+  });
+  window.addEventListener('orientationchange', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(relayout, 300);
+  });
+
+  // 切回前台时立刻补一次，而不是干等下一个轮询周期。
+  document.addEventListener('visibilitychange', function () {
+    pageVisible = !document.hidden;
+    if (pageVisible) drive(0);
+  });
+
+  // 墙滚出屏幕就停轮询（长文档里它大部分时间都在屏幕外）
+  if (window.IntersectionObserver) {
+    onScreen = null;
+    new IntersectionObserver(function (entries) {
+      var was = onScreen;
+      onScreen = entries[0].isIntersecting;
+      // 只在「从屏幕外滚回来」时补一次。首次回调只记录状态、不发请求——
+      // 首屏那一次由下面的 request() 负责，否则同一时刻会发两次。
+      if (onScreen && was === false) drive(0);
+    }, { rootMargin: '200px' }).observe(wallEl);
+  }
+
+  // 首屏。relayout 依赖布局宽度，所以等一帧再开始。
+  request().then(function (delay) {
+    relayout();
+    drive(delay);
+  });
+})();
 </script>
 
 </body>

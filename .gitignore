@@ -10,3 +10,22 @@
 Thumbs.db
 Desktop.ini
 desktop.ini
+
+# ── 表情墙功能新增：以下三项必须忽略，否则会泄密 ──────────────
+# 「推送更新.bat」里是 git add -A，会把这些一并提交到公开仓库。
+#
+# .dev.vars 本地开发用的管理密钥（ADMIN_TOKEN）。被提交等于把删除权限公开。
+#
+# 用通配符而不是精确名：精确的 `.dev.vars` 盖不住 `.dev.vars.bak`、`.dev.vars.orig`
+# 这类备份文件，而「备份一下再改」恰恰是最容易顺手做出来的动作。
+# （这一条是实测踩到的：备份文件确实没被忽略，而推送脚本是 git add -A。）
+.dev.vars*
+#
+# .wrangler/ 是 wrangler 的本地工作目录，里面有一份表情墙数据的 SQLite 副本。
+.wrangler/
+#
+# node_modules/ 只在本地跑 wrangler 时需要，线上 Worker 无运行期依赖。
+node_modules/
+
+# Claude Code 的本地设置（权限白名单等），属于本机配置，不该进仓库。
+.claude/
