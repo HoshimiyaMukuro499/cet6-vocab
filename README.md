@@ -132,6 +132,18 @@ Cloudflare 后台 → 你的 Worker（`cet6-vocab`）→ `Settings` →
 保存。**这串东西就是你删除表情用的令牌，记住它**（存到手机备忘录里）。
 它不会出现在网页上，也不在 GitHub 仓库里。
 
+⚠️ **这一步必须在「第 4 步推送成功之后」才能做。** 推送之前，线上的 Worker
+还是纯静态的（里面没有脚本），后台会拒绝你，报「Variables cannot be added to a
+Worker that only has static assets」——那不是出错，是**还没有可以挂变量的东西**。
+
+⚠️ 如果推送**之后**仍报这句话，说明你打开的是部署之前的页面缓存：
+按 **`Ctrl+Shift+R`** 强刷，或关掉标签页重新打开。这个假报错只在
+「从纯静态第一次变成有脚本」时出现一次。
+
+判断脚本到底有没有上线，**看 `/api/emojis` 比看后台可靠**：在手机上打开
+`https://cet6-vocab.749316609.workers.dev/api/emojis`，返回一小段 JSON
+就说明脚本已经在跑了。
+
 **第 4 步：推送验收**
 
 双击 `推送更新.bat`，等 Cloudflare 部署完（约 1 分钟），打开网站往下滑，
